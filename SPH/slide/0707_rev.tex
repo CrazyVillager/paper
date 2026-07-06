@@ -1,0 +1,213 @@
+% 進捗報告スライド改善版（2026/07/07）
+% コンパイル: latexmk -lualatex 0707_rev.tex
+\documentclass[aspectratio=169,11pt]{beamer}
+\usepackage{luatexja}
+\usepackage[haranoaji]{luatexja-preset}
+% スライドでは可読性のためゴシック体を既定とする
+\renewcommand{\kanjifamilydefault}{\gtdefault}
+\usepackage{booktabs}
+
+% 元スライドの配色（濃い青緑のヘッダ）を踏襲する
+\definecolor{labdark}{RGB}{31,50,56}
+\definecolor{laborange}{RGB}{230,140,30}
+\usetheme{default}
+\useinnertheme{rectangles}
+\setbeamercolor{frametitle}{bg=labdark, fg=white}
+\setbeamercolor{title}{fg=labdark}
+\setbeamercolor{structure}{fg=labdark}
+\setbeamercolor{alerted text}{fg=laborange}
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{footline}[frame number]
+\setbeamerfont{frametitle}{series=\bfseries, size=\large}
+
+\title{進捗報告 --- SPH法の高速化に向けた文献調査}
+\author{2331055　越川伸哉}
+\institute{情報工学科　前川研究室}
+\date{2026/07/07}
+
+\begin{document}
+
+% ---------- 表紙 ----------
+\begin{frame}
+  \titlepage
+\end{frame}
+
+% ---------- はじめに ----------
+\begin{frame}{はじめに}
+  卒業研究のテーマを，先月まで検討していた電子回路シミュレーションの高速化から，
+  粒子法への興味関心にもとづきSPH法（Smoothed Particle Hydrodynamics）の高速化へ変更した．
+
+  \vspace{1em}
+  研究の大目標はSPH法の\alert{計算の高速化}である．
+  今週は，高速化のどこに取り組む余地があるかを見定めるため，
+  SPH法の基礎と高速化に関する文献の調査を行った．
+
+  \vspace{1em}
+  本報告では，読んだ文献を計算コストの構造・既存の高速化手法・壁境界条件の扱いという
+  三つの観点で整理し，今後の研究方針を示す．
+\end{frame}
+
+% ---------- SPH法の概要 ----------
+\begin{frame}{SPH法の概要}
+  SPH法は流体を粒子の集合として離散化し，
+  近傍粒子との相互作用をカーネル関数で重み付けして物理量を計算する
+  ラグランジュ的な粒子法である\cite{crespo2007}．
+  格子を必要としないため，自由表面や大変形を伴う流れを自然に扱える．
+
+  \vspace{1em}
+  弱圧縮性SPHはダムブレイクや波と沿岸構造物の衝突といった
+  実工学問題に広く適用されており，
+  代表的な公開ソルバとしてDualSPHysicsがある\cite{dominguez2022}．
+  DualSPHysicsはCPU（OpenMP）とGPU（CUDA）の両方で動作し，
+  実問題規模の解析を単一GPUで実行できることを設計目標としている．
+
+  \vspace{1em}
+  本研究では，このDualSPHysicsを高速化のベースライン（比較基準）として用いることを考えている．
+\end{frame}
+
+% ---------- 計算コストの構造 ----------
+\begin{frame}{SPH法の計算コストの構造}
+  SPH法の1ステップは近傍リスト構築・力の計算・時間積分の三つに分けられる．
+  Domínguezらの測定によれば，実行時間の内訳は次のとおりであり，
+  \alert{粒子間相互作用（力の計算）が全体の8〜9割以上を占める}\cite{dominguez2010}．
+
+  \vspace{0.8em}
+  \begin{center}
+    \begin{tabular}{lcc}
+      \toprule
+      処理 & Cell-Linked List & Verlet List \\
+      \midrule
+      近傍リスト構築 & 1.7\,\% & 20.5\,\% \\
+      力の計算（相互作用） & \alert{96.7\,\%} & \alert{78\,\%} \\
+      時間積分 & 1.6\,\% & 1.5\,\% \\
+      \bottomrule
+    \end{tabular}
+  \end{center}
+
+  \vspace{0.8em}
+  したがってSPH法の高速化は，相互作用の計算回数そのものを減らすか，
+  相互作用計算の処理効率を高めるかのいずれかに帰着する．
+\end{frame}
+
+% ---------- 高速化アプローチの整理 ----------
+\begin{frame}{既存の高速化アプローチの整理}
+  読んだ文献から，SPH法の高速化は実装レベルとアルゴリズムレベルに大別できる．
+
+  \vspace{0.8em}
+  実装レベルの高速化として，CPU/GPU双方に対する最適化戦略\cite{dominguez2013}や，
+  GPU上のデータ構造（AoSとSoA）の選択による性能差の評価\cite{jsces2023}が報告されている．
+  近傍探索についても，コンパクトハッシュ等のデータ構造の工夫\cite{ihmsen2011}や
+  GPU上で構築可能なスライスデータ構造\cite{harada2007slice}が提案されている．
+
+  \vspace{0.8em}
+  アルゴリズムレベルの高速化として，解析領域ごとに粒子径を変えて
+  粒子数自体を削減する解像度可変の手法があり，
+  MPS法では近傍判定回数の削減が報告されている\cite{ishii2024}．
+
+  \vspace{0.8em}
+  粒子法はGPUと相性がよくGPU利用自体は標準的であるため，
+  本研究では\alert{計算量を削減するアルゴリズムレベルの高速化}を軸に据える．
+\end{frame}
+
+% ---------- 壁境界条件 ----------
+\begin{frame}{壁境界条件の扱いと高速化の接点}
+  高速化の切り口の候補として壁境界条件に注目した．
+
+  \vspace{0.8em}
+  DualSPHysics標準のDynamic Boundary Condition（DBC）は，
+  壁を流体と同じ性質の固定粒子で表現するため
+  同一の計算ループで処理でき，計算時間の面で有利である\cite{crespo2007}．
+  一方で壁近傍の圧力に非物理的な誤差が生じる弱点があり，
+  境界粒子の密度を流体側から外挿して補正するmDBCが導入された\cite{english2021}．
+
+  \vspace{0.8em}
+  壁粒子を置かない方式として，壁面を面素で扱う半解析的境界条件\cite{ferrand2013}や，
+  壁をポリゴンモデルで表現し壁粒子を不要とする手法\cite{harada2007wall}がある．
+  壁粒子の削減は相互作用対の削減とメモリ使用量の削減に直結するため，
+  アルゴリズムレベルの高速化と整合する．
+\end{frame}
+
+% ---------- 考察と今後の方針 ----------
+\begin{frame}{考察と今後の方針}
+  文献調査から，SPH法の実行時間は粒子間相互作用に集中しており，
+  高速化の本質は相互作用回数の削減にあることを確認した．
+
+  \vspace{1em}
+  その削減の手段として，壁粒子を減らす境界条件の工夫，
+  粒子数自体を減らす解像度可変，時間刻みを大きくできる安定な定式化，
+  という複数の候補が存在する．
+  現時点では壁境界条件に限定せず，これらを比較検討する．
+
+  \vspace{1em}
+  今後はDualSPHysicsをベースラインとして動作環境を構築し，
+  実行時間の内訳を自分の環境で計測して文献の傾向を確認したうえで，
+  取り組む手法を決定する．
+\end{frame}
+
+% ---------- おわりに ----------
+\begin{frame}{おわりに}
+  今週は，研究テーマをSPH法の高速化へ変更し，
+  その足がかりとして高速化に関する文献の調査を行った．
+
+  \vspace{1em}
+  調査の結果，計算コストの支配項が粒子間相互作用にあること，
+  高速化アプローチが実装レベルとアルゴリズムレベルに大別できること，
+  壁境界条件の工夫が相互作用の削減につながることを整理した．
+
+  \vspace{1em}
+  来週は，DualSPHysicsの実行環境を構築して計算時間の内訳を計測し，
+  高速化手法の候補を絞り込む予定である．
+\end{frame}
+
+% ---------- 参考文献 ----------
+\begin{frame}[allowframebreaks]{参考文献}
+  \small
+  \begin{thebibliography}{9}
+    \setbeamertemplate{bibliography item}[text]
+    \bibitem{dominguez2022}
+      J.~M. Domínguez et al.:
+      DualSPHysics: from fluid dynamics to multiphysics problems,
+      \textit{Computational Particle Mechanics}, Vol.~9, pp.~867--895 (2022).
+    \bibitem{dominguez2010}
+      J.~M. Domínguez, A.~J.~C. Crespo, M. Gómez-Gesteira, J.~C. Marongiu:
+      Neighbour lists in smoothed particle hydrodynamics,
+      \textit{Int.\ J.\ Numer.\ Meth.\ Fluids}, Vol.~67, pp.~2026--2042 (2011).
+    \bibitem{crespo2007}
+      A.~J.~C. Crespo, M. Gómez-Gesteira, R.~A. Dalrymple:
+      Boundary Conditions Generated by Dynamic Particles in SPH Methods,
+      \textit{CMC: Computers, Materials \& Continua}, Vol.~5, No.~3, pp.~173--184 (2007).
+    \bibitem{english2021}
+      A. English et al.:
+      Modified dynamic boundary conditions (mDBC) for general-purpose smoothed particle hydrodynamics (SPH),
+      \textit{Computational Particle Mechanics}, Vol.~9, pp.~911--925 (2022).
+    \bibitem{ferrand2013}
+      M. Ferrand, D.~R. Laurence, B.~D. Rogers, D. Violeau, C. Kassiotis:
+      Unified semi-analytical wall boundary conditions for inviscid, laminar or turbulent flows in the meshless SPH method,
+      \textit{Int.\ J.\ Numer.\ Meth.\ Fluids}, Vol.~71, pp.~446--472 (2013).
+    \bibitem{dominguez2013}
+      J.~M. Domínguez, A.~J.~C. Crespo, M. Gómez-Gesteira:
+      Optimization strategies for CPU and GPU implementations of a smoothed particle hydrodynamics method,
+      \textit{Computer Physics Communications}, Vol.~184, No.~3, pp.~617--627 (2013).
+    \bibitem{ihmsen2011}
+      M. Ihmsen, N. Akinci, M. Becker, M. Teschner:
+      A parallel SPH implementation on multi-core CPUs,
+      \textit{Computer Graphics Forum}, Vol.~30, No.~1, pp.~99--112 (2011).
+    \bibitem{harada2007slice}
+      原田隆宏, 越塚誠一, 河口洋一郎:
+      GPUを用いた粒子法シミュレーションのためのスライスデータ構造,
+      \textit{日本計算工学会論文集}, No.~20070028 (2007).
+    \bibitem{harada2007wall}
+      原田隆宏, 越塚誠一, 河口洋一郎:
+      SPHにおける壁境界計算手法の改良,
+      \textit{情報処理学会論文誌}, Vol.~48, No.~4, pp.~1838--1846 (2007).
+    \bibitem{ishii2024}
+      石井滉人, 中村あすか, 富永浩文, 前川仁孝:
+      粒子の影響半径を用いた影響範囲の近似精度向上による解像度可変型MPS法の近傍判定回数削減,
+      \textit{情報処理学会研究報告}, Vol.~2024-HPC-195, No.~22 (2024).
+    \bibitem{jsces2023}
+      GPUを用いた非圧縮性流体シミュレーションにおけるデータ構造AoSとSoAに着目した性能評価,
+      \textit{第28回計算工学講演会論文集}, Vol.~28, D-09-01 (2023).
+  \end{thebibliography}
+\end{frame}
+
+\end{document}
